@@ -121,20 +121,21 @@ func (wp *WorkerPool[T]) getWorker() *worker[T] {
 }
 
 func (wp *WorkerPool[T]) workerFunc(w *worker[T]) {
-	for {
+	var c *wcontext.WorkerContext[T]
+
+	for c = range w.ch {
+		wp.handlerFunc(c)
+		lock(&wp.lock, func() {
+			w.lastUseTime = time.Now()
+			wp.ready = append(wp.ready, w)
+		})
 		select {
 		case <-w.ctx.Done():
 			lock(&wp.lock, func() {
 				wp.workersCount--
 			})
 			return
-		case t := <-w.ch:
-			wp.handlerFunc(t)
-			lock(&wp.lock, func() {
-				w.lastUseTime = time.Now()
-				wp.ready = append(wp.ready, w)
-			})
-
+		default:
 		}
 	}
 }
