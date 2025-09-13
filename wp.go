@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,13 +41,13 @@ type WorkerPool[T any] struct {
 	// Context
 	ctx context.Context
 
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 }
 
-func New[T any](handlerFunc HandlerFunc[T], ctx context.Context) *WorkerPool[T] {
-	ctx, cancel := context.WithCancel(ctx)
+func New[T any](handlerFunc HandlerFunc[T], ctx context.Context, opts ...Option[T]) *WorkerPool[T] {
+	ctx, cancel := context.WithCancelCause(ctx)
 	var counter atomic.Uint32
-	return &WorkerPool[T]{
+	wp := &WorkerPool[T]{
 		handlerFunc: handlerFunc,
 
 		workerPool: pool.New(
@@ -59,19 +60,29 @@ func New[T any](handlerFunc HandlerFunc[T], ctx context.Context) *WorkerPool[T] 
 		ctx:    ctx,
 		cancel: cancel,
 	}
+
+	for _, opt := range opts {
+		opt(wp)
+	}
+
+	return wp
 }
 
 func (wp *WorkerPool[T]) Start() {
 
 	// TODO: add clean
 	go func() {
+		log := slog.With("pool", "cleaner")
 		var scratch []*worker[T]
 		for {
 			wp.clean(&scratch)
+			log.Info("clean", "count", len(scratch))
 			select {
 			case <-wp.ctx.Done():
+				log.Info("cleaner is stopping")
 				return
 			default:
+				log.Info("cleaner is sleeping")
 				time.Sleep(wp.getMaxIdleWorkerDuration())
 			}
 		}
@@ -121,27 +132,45 @@ func (wp *WorkerPool[T]) getWorker() *worker[T] {
 }
 
 func (wp *WorkerPool[T]) workerFunc(w *worker[T]) {
+	log := slog.With("workerID", w.ctx.GetValue())
+	log.Info("worker is starting")
 	for {
+		// fmt.Println("worker is running", w.ctx.GetValue())
 		select {
 		case <-w.ctx.Done():
+			//TODO: его может выбрать из ready хотя он закончил работу
+			log.Error("worker is stopping", "cause", context.Cause(w.ctx))
+			log.Info("worker is stopping")
 			lock(&wp.lock, func() {
 				wp.workersCount--
 			})
 			return
 		case t := <-w.ch:
+			log.Info("worker is serving", "value", t.GetValue())
+			// fmt.Println("worker is serving", w.ctx.GetValue())
 			wp.handlerFunc(t)
 			lock(&wp.lock, func() {
-				w.lastUseTime = time.Now()
-				wp.ready = append(wp.ready, w)
+				wp.absolve(w)
 			})
 
 		}
 	}
 }
 
+func (wp *WorkerPool[T]) obsolete(w *worker[T]) {
+
+}
+
+func (wp *WorkerPool[T]) absolve(w *worker[T]) {
+	w.lastUseTime = time.Now()
+	wp.ready = append(wp.ready, w)
+}
+
 func (wp *WorkerPool[T]) Stop() {
-	wp.cancel()
+	fmt.Println("stop")
+	wp.cancel(errors.New("stop"))
 	wp.wg.Wait()
+	fmt.Println("stopped")
 }
 
 func (wp *WorkerPool[T]) clean(scratch *[]*worker[T]) {
@@ -185,6 +214,7 @@ func (wp *WorkerPool[T]) clean(scratch *[]*worker[T]) {
 	// are located on non-local CPUs.
 	tmp := *scratch
 	for i := range tmp {
+		fmt.Println("worker is obsolete", tmp[i].ctx.GetValue())
 		//TODO: add err
 		tmp[i].Cancel(errors.New("worker is obsolete"))
 		tmp[i] = nil
@@ -198,7 +228,7 @@ func (wp *WorkerPool[T]) getMaxIdleWorkerDuration() time.Duration {
 	return wp.MaxIdleWorkerDuration
 }
 
-//
+// DEV
 
 func lock(lock *sync.Mutex, f func()) {
 	lock.Lock()
@@ -208,6 +238,6 @@ func lock(lock *sync.Mutex, f func()) {
 
 func (wp *WorkerPool[T]) Status() string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("WorkersCount: %d\tMaxWorkersCount: %d\n", wp.workersCount, wp.MaxWorkersCount))
+	b.WriteString(fmt.Sprintf("WorkersCount: %d\tMaxWorkersCount: %d", wp.workersCount, wp.MaxWorkersCount))
 	return b.String()
 }
