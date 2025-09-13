@@ -20,7 +20,7 @@ type WorkerContext[T any] struct {
 }
 
 var (
-	// Check that WorkerContext implements Context.
+	// Check that WorkerContext implements context.Context.
 	_ context.Context = &WorkerContext[any]{}
 
 	// Check that WorkerContext implements Context.
