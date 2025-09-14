@@ -15,6 +15,7 @@ import (
 )
 
 type HandlerFunc[T any] = func(c wcontext.Context[T]) error
+type ErrHandler = func(err error)
 
 type WorkerPool[T any] struct {
 	// Pool
@@ -22,6 +23,8 @@ type WorkerPool[T any] struct {
 
 	// Func
 	handlerFunc HandlerFunc[T]
+
+	ErrHandler ErrHandler
 
 	ready []*worker[T]
 
@@ -44,21 +47,9 @@ type WorkerPool[T any] struct {
 	cancel context.CancelCauseFunc
 }
 
-func New[T any](handlerFunc HandlerFunc[T], ctx context.Context, opts ...Option[T]) *WorkerPool[T] {
-	ctx, cancel := context.WithCancelCause(ctx)
-	var counter atomic.Uint32
+func New[T any](handlerFunc HandlerFunc[T], opts ...Option[T]) *WorkerPool[T] {
 	wp := &WorkerPool[T]{
 		handlerFunc: handlerFunc,
-
-		workerPool: pool.New(
-			func() *worker[T] {
-				ctx := wcontext.New(ctx, counter.Add(1))
-				return NewWorker[T](ctx)
-			},
-		),
-
-		ctx:    ctx,
-		cancel: cancel,
 	}
 
 	for _, opt := range opts {
@@ -68,10 +59,25 @@ func New[T any](handlerFunc HandlerFunc[T], ctx context.Context, opts ...Option[
 	return wp
 }
 
-func (wp *WorkerPool[T]) Start() {
+func (wp *WorkerPool[T]) Start(ctx context.Context) {
+	var counter atomic.Uint32
+	ctx, cancel := context.WithCancelCause(ctx)
+
+	wp.workerPool = pool.New(
+		func() *worker[T] {
+			ctx := wcontext.New(ctx, counter.Add(1))
+			return NewWorker[T](ctx)
+		},
+	)
+	wp.ctx = ctx
+	wp.cancel = cancel
+
+	wp.workersCount = 0
+	wp.ready = make([]*worker[T], 0, wp.MaxWorkersCount)
 
 	// TODO: add clean
-	go func() {
+	wp.wg.Go(func() {
+		//TODO: добавь функцию которая просто подставляет функцию в select
 		log := slog.With("pool", "cleaner")
 		var scratch []*worker[T]
 		for {
@@ -79,6 +85,7 @@ func (wp *WorkerPool[T]) Start() {
 			log.Info("clean", "count", len(scratch))
 			select {
 			case <-wp.ctx.Done():
+				fmt.Println("cleaner is stopping")
 				log.Info("cleaner is stopping")
 				return
 			default:
@@ -86,8 +93,10 @@ func (wp *WorkerPool[T]) Start() {
 				time.Sleep(wp.getMaxIdleWorkerDuration())
 			}
 		}
-	}()
+	})
 }
+
+// Serve
 
 func (wp *WorkerPool[T]) Serve(t T) bool {
 	w := wp.getWorker()
@@ -131,24 +140,52 @@ func (wp *WorkerPool[T]) getWorker() *worker[T] {
 	return w
 }
 
+// Worker
+
 func (wp *WorkerPool[T]) workerFunc(w *worker[T]) {
+	defer func() {
+		lock(&wp.lock, func() {
+			wp.obsolete(w)
+		})
+	}()
 	var c *wcontext.WorkerContext[T]
 
+	// for {
+	// 	select {
+	// 	case c = <-w.ch:
+	// 		wp.handlerFunc(c)
+	// 		lock(&wp.lock, func() {
+	// 			wp.absolve(w)
+	// 		})
+	// 	case <-w.ctx.Done():
+	// 		if wp.ErrHandler != nil {
+	// 			wp.ErrHandler(context.Cause(w.ctx))
+	// 		}
+	// 		return
+	// 	}
+	// }
+
 	for c = range w.ch {
+		if c == nil {
+			if wp.ErrHandler != nil {
+				wp.ErrHandler(context.Cause(w.ctx))
+			}
+			return
+		}
 		wp.handlerFunc(c)
 		lock(&wp.lock, func() {
-			w.lastUseTime = time.Now()
-			wp.ready = append(wp.ready, w)
+			wp.absolve(w)
 		})
-		select {
-		case <-w.ctx.Done():
-			lock(&wp.lock, func() {
-				wp.workersCount--
-			})
-			return
-		default:
-		}
 	}
+}
+
+func (wp *WorkerPool[T]) obsolete(_ *worker[T]) {
+	wp.workersCount--
+}
+
+func (wp *WorkerPool[T]) absolve(w *worker[T]) {
+	w.lastUseTime = time.Now()
+	wp.ready = append(wp.ready, w)
 }
 
 func (wp *WorkerPool[T]) Stop() {
@@ -158,6 +195,7 @@ func (wp *WorkerPool[T]) Stop() {
 	fmt.Println("stopped")
 }
 
+// TODO: refactor
 func (wp *WorkerPool[T]) clean(scratch *[]*worker[T]) {
 	maxIdleWorkerDuration := wp.getMaxIdleWorkerDuration()
 

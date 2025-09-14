@@ -15,10 +15,12 @@ type worker[T any] struct {
 }
 
 func NewWorker[T any](ctx *context.WorkerContext[uint32]) *worker[T] {
-	return &worker[T]{
+	w := worker[T]{
 		ch:  make(chan *context.WorkerContext[T], 1),
 		ctx: ctx,
 	}
+	ctx.AfterFunc(func() { w.ch <- nil })
+	return &w
 }
 
 func (w *worker[T]) Cancel(cause error) {

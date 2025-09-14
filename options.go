@@ -15,3 +15,9 @@ func WithMaxIdleWorkerDuration[T any](duration time.Duration) Option[T] {
 		wp.MaxIdleWorkerDuration = duration
 	}
 }
+
+func WithErrHandler[T any](handler ErrHandler) Option[T] {
+	return func(wp *WorkerPool[T]) {
+		wp.ErrHandler = handler
+	}
+}

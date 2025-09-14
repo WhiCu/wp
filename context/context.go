@@ -37,6 +37,10 @@ func New[T any](ctx context.Context, value T) *WorkerContext[T] {
 	}
 }
 
+func (c *WorkerContext[T]) AfterFunc(f func()) {
+	context.AfterFunc(c.ctx, f)
+}
+
 func (c *WorkerContext[T]) Cancel(cause error) {
 	c.cancel(cause)
 }
