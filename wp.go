@@ -29,6 +29,8 @@ type WorkerPool[T any] struct {
 
 	workersCount uint32
 
+	MinWorkersCount uint32
+
 	MaxIdleWorkerDuration time.Duration
 
 	lock sync.Mutex
@@ -68,9 +70,8 @@ func (wp *WorkerPool[T]) Start(ctx context.Context) {
 	wp.ready = make([]*worker[T], 0, wp.MaxWorkersCount)
 
 	wp.wg.Go(func() {
-		var scratch []*worker[T]
 		for {
-			wp.clean(&scratch)
+			wp.clean()
 			select {
 			case <-wp.ctx.Done():
 				return
@@ -79,6 +80,12 @@ func (wp *WorkerPool[T]) Start(ctx context.Context) {
 			}
 		}
 	})
+
+	var w *worker[T]
+	for range wp.MinWorkersCount {
+		w = wp.createWorker()
+		wp.ready.Push(w)
+	}
 }
 
 func (wp *WorkerPool[T]) Serve(t T) bool {
@@ -95,33 +102,34 @@ func (wp *WorkerPool[T]) Serve(t T) bool {
 
 func (wp *WorkerPool[T]) getWorker() *worker[T] {
 	var w *worker[T]
-	createWorker := false
 
 	lock(&wp.lock, func() {
 		if len(wp.ready) <= 0 {
 			if wp.workersCount < wp.MaxWorkersCount {
-				createWorker = true
-				wp.workersCount++
+				w = wp.createWorker()
 			}
 		} else {
 			w = wp.ready.Pop()
 		}
 	})
+	return w
+}
 
-	if w == nil {
-		if !createWorker {
-			return nil
-		}
-		w = wp.pool.Get()
-		wp.wg.Go(func() {
-			wp.workerFunc(w)
-			wp.pool.Put(w)
-		})
-	}
+func (wp *WorkerPool[T]) createWorker() (w *worker[T]) {
+	w = wp.pool.Get()
+	w.obsoleted = false
+	wp.wg.Go(func() {
+		wp.workerFunc(w)
+		wp.pool.Put(w)
+	})
+	wp.workersCount++
 	return w
 }
 
 func (wp *WorkerPool[T]) workerFunc(w *worker[T]) {
+	defer lock(&wp.lock, func() {
+		wp.obsolete(w)
+	})
 	var c *WorkerContext[T]
 
 	for c = range w.ch {
@@ -138,13 +146,11 @@ func (wp *WorkerPool[T]) workerFunc(w *worker[T]) {
 		})
 	}
 
-	lock(&wp.lock, func() {
-		wp.obsolete(w)
-	})
 }
 
-func (wp *WorkerPool[T]) obsolete(_ *worker[T]) {
+func (wp *WorkerPool[T]) obsolete(w *worker[T]) {
 	wp.workersCount--
+	w.obsoleted = true
 }
 
 func (wp *WorkerPool[T]) absolve(w *worker[T]) {
@@ -157,45 +163,39 @@ func (wp *WorkerPool[T]) Stop() {
 	wp.wg.Wait()
 }
 
-func (wp *WorkerPool[T]) clean(scratch *[]*worker[T]) {
+func (wp *WorkerPool[T]) clean() {
+	// TODO: убивает всех до нуля а не MinWorkersCount если проходит условие
+	wp.lock.Lock()
+	if wp.workersCount <= wp.MinWorkersCount {
+		wp.lock.Unlock()
+		return
+	}
+	wp.lock.Unlock()
+
 	maxIdleWorkerDuration := wp.MaxIdleWorkerDuration
 
 	criticalTime := time.Now().Add(-maxIdleWorkerDuration)
 
-	wp.lock.Lock()
-	ready := wp.ready
-	n := len(ready)
-
-	l, r := 0, n-1
-	for l <= r {
-		mid := (l + r) / 2
-		if criticalTime.After(wp.ready[mid].lastUseTime) {
-			l = mid + 1
-		} else {
-			r = mid - 1
+	var w *worker[T]
+	var i int
+	lock(&wp.lock, func() {
+		for i, w = range wp.ready {
+			if criticalTime.Before(w.lastUseTime) {
+				break
+			}
+			w.obsoleted = true
+			w.Cancel(errors.New("idle worker"))
 		}
-	}
-	i := r
-	if i == -1 {
-		wp.lock.Unlock()
-		return
-	}
 
-	*scratch = append((*scratch)[:0], ready[:i+1]...)
-	m := copy(ready, ready[i+1:])
-	for i = m; i < n; i++ {
-		ready[i] = nil
-	}
-	wp.ready = ready[:m]
-	wp.lock.Unlock()
+		wp.ready = wp.ready[i:]
 
-	tmp := *scratch
-	for i := range tmp {
-		fmt.Println("worker is obsolete", tmp[i].ctx.GetValue())
-		// TODO: добавить обработку ошибок
-		tmp[i].Cancel(errors.New("worker is obsolete"))
-		tmp[i] = nil
-	}
+		for i, w = range wp.ready {
+			if w.obsoleted {
+				wp.ready = append(wp.ready[:i], wp.ready[i+1:]...)
+			}
+		}
+	})
+
 }
 
 func lock(lock *sync.Mutex, f func()) {

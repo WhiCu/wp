@@ -10,6 +10,12 @@ func WithMaxWorkersCount[T any](count uint32) Option[T] {
 	}
 }
 
+func WithMinWorkersCount[T any](count uint32) Option[T] {
+	return func(wp *WorkerPool[T]) {
+		wp.MinWorkersCount = count
+	}
+}
+
 func WithMaxIdleWorkerDuration[T any](duration time.Duration) Option[T] {
 	return func(wp *WorkerPool[T]) {
 		wp.MaxIdleWorkerDuration = duration

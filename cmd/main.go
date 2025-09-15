@@ -22,11 +22,12 @@ func main() {
 
 	workPool := wp.New(
 		myController(&i),
+		wp.WithMinWorkersCount[*MyInput](3),
 		wp.WithMaxWorkersCount[*MyInput](10),
 		wp.WithMaxIdleWorkerDuration[*MyInput](time.Second),
 		wp.WithErrHandler[*MyInput]( // Обработчик ошибок
 			func(err wp.Context[error]) {
-				fmt.Println("error", err.GetValue())
+				fmt.Println("errorHandler", err.GetValue())
 			},
 		),
 	)
@@ -40,9 +41,8 @@ func main() {
 		fmt.Println(workPool.Status())
 	}
 
+	time.Sleep(10 * time.Second)
 	fmt.Println(workPool.Status())
-
-	workPool.Stop()
 	workPool.Stop()
 
 	fmt.Println("i", i.Load())
