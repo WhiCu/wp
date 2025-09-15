@@ -1,4 +1,4 @@
-package context
+package wp
 
 import (
 	"context"
@@ -7,33 +7,30 @@ import (
 
 type Context[T any] interface {
 	context.Context
-	Cancel(cause error)
-
+	// Cancel(cause error)
 	GetValue() T
 }
 
 type WorkerContext[T any] struct {
-	ctx    context.Context
+	ctx context.Context
+
 	cancel context.CancelCauseFunc
 
 	value T
 }
 
 var (
-	// Check that WorkerContext implements context.Context.
 	_ context.Context = &WorkerContext[any]{}
 
-	// Check that WorkerContext implements Context.
 	_ Context[any] = &WorkerContext[any]{}
 )
 
-func New[T any](ctx context.Context, value T) *WorkerContext[T] {
+func NewContext[T any](ctx context.Context, value T) *WorkerContext[T] {
 	ctx, cancel := context.WithCancelCause(ctx)
 	return &WorkerContext[T]{
 		ctx:    ctx,
 		cancel: cancel,
-
-		value: value,
+		value:  value,
 	}
 }
 
@@ -52,22 +49,18 @@ func (c *WorkerContext[T]) Context() context.Context {
 	return c.ctx
 }
 
-// Deadline implements context.Context.
 func (c *WorkerContext[T]) Deadline() (deadline time.Time, ok bool) {
 	return c.Context().Deadline()
 }
 
-// Done implements context.Context.
 func (c *WorkerContext[T]) Done() <-chan struct{} {
 	return c.Context().Done()
 }
 
-// Err implements context.Context.
 func (c *WorkerContext[T]) Err() error {
 	return c.Context().Err()
 }
 
-// Value implements context.Context.
 func (c *WorkerContext[T]) Value(key any) any {
 	return c.Context().Value(key)
 }
