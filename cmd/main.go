@@ -1,7 +1,7 @@
 package main
 
 import (
-	ctx "context"
+	"context"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -32,7 +32,8 @@ func main() {
 		),
 	)
 
-	workPool.Start(ctx.Background())
+	ctx, _ := context.WithTimeout(context.Background(), 100*time.Second)
+	workPool.Start(ctx)
 
 	for i := 0; i < 10; i++ {
 		if !workPool.Serve(&MyInput{Name: fmt.Sprint("hello", i)}) {
@@ -44,7 +45,7 @@ func main() {
 	time.Sleep(10 * time.Second)
 	fmt.Println(workPool.Status())
 	workPool.Stop()
-
+	fmt.Println(workPool.Status())
 	fmt.Println("i", i.Load())
 }
 

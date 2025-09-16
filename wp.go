@@ -116,6 +116,7 @@ func (wp *WorkerPool[T]) getWorker() *worker[T] {
 }
 
 func (wp *WorkerPool[T]) createWorker() (w *worker[T]) {
+	// TODO: наверное было бы хорошо увидеть здесь lock
 	w = wp.pool.Get()
 	w.obsoleted = false
 	wp.wg.Go(func() {
@@ -165,21 +166,22 @@ func (wp *WorkerPool[T]) Stop() {
 
 func (wp *WorkerPool[T]) clean() {
 	// TODO: убивает всех до нуля а не MinWorkersCount если проходит условие
-	wp.lock.Lock()
-	if wp.workersCount <= wp.MinWorkersCount {
-		wp.lock.Unlock()
-		return
-	}
-	wp.lock.Unlock()
-
-	maxIdleWorkerDuration := wp.MaxIdleWorkerDuration
-
-	criticalTime := time.Now().Add(-maxIdleWorkerDuration)
-
-	var w *worker[T]
-	var i int
 	lock(&wp.lock, func() {
+		if wp.workersCount <= wp.MinWorkersCount {
+			return
+		}
+
+		maxIdleWorkerDuration := wp.MaxIdleWorkerDuration
+
+		criticalTime := time.Now().Add(-maxIdleWorkerDuration)
+
+		var w *worker[T]
+		var i int
+
 		for i, w = range wp.ready {
+			if len(wp.ready)-i <= int(wp.MinWorkersCount) {
+				break
+			}
 			if criticalTime.Before(w.lastUseTime) {
 				break
 			}
@@ -189,6 +191,7 @@ func (wp *WorkerPool[T]) clean() {
 
 		wp.ready = wp.ready[i:]
 
+		// TODO: скорее всего бесполезно
 		for i, w = range wp.ready {
 			if w.obsoleted {
 				wp.ready = append(wp.ready[:i], wp.ready[i+1:]...)
@@ -206,6 +209,6 @@ func lock(lock *sync.Mutex, f func()) {
 
 func (wp *WorkerPool[T]) Status() string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("WorkersCount: %d\tMaxWorkersCount: %d", wp.workersCount, wp.MaxWorkersCount))
+	b.WriteString(fmt.Sprintf("-WorkersCount: %d\t↑MaxWorkersCount: %d\t↓MinWorkersCount: %d", wp.workersCount, wp.MaxWorkersCount, wp.MinWorkersCount))
 	return b.String()
 }
