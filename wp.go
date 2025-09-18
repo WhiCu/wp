@@ -2,7 +2,6 @@ package wp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -118,7 +117,6 @@ func (wp *WorkerPool[T]) getWorker() *worker[T] {
 func (wp *WorkerPool[T]) createWorker() (w *worker[T]) {
 	// TODO: наверное было бы хорошо увидеть здесь lock
 	w = wp.pool.Get()
-	w.obsoleted = false
 	wp.wg.Go(func() {
 		wp.workerFunc(w)
 		wp.pool.Put(w)
@@ -151,7 +149,6 @@ func (wp *WorkerPool[T]) workerFunc(w *worker[T]) {
 
 func (wp *WorkerPool[T]) obsolete(w *worker[T]) {
 	wp.workersCount--
-	w.obsoleted = true
 }
 
 func (wp *WorkerPool[T]) absolve(w *worker[T]) {
@@ -160,7 +157,7 @@ func (wp *WorkerPool[T]) absolve(w *worker[T]) {
 }
 
 func (wp *WorkerPool[T]) Stop() {
-	wp.cancel(errors.New("SIGTERM"))
+	wp.cancel(ErrSigterm)
 	wp.wg.Wait()
 }
 
@@ -185,18 +182,10 @@ func (wp *WorkerPool[T]) clean() {
 			if criticalTime.Before(w.lastUseTime) {
 				break
 			}
-			w.obsoleted = true
-			w.Cancel(errors.New("idle worker"))
+			w.Cancel(ErrIdleWorker)
 		}
 
 		wp.ready = wp.ready[i:]
-
-		// TODO: скорее всего бесполезно
-		for i, w = range wp.ready {
-			if w.obsoleted {
-				wp.ready = append(wp.ready[:i], wp.ready[i+1:]...)
-			}
-		}
 	})
 
 }

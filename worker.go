@@ -9,8 +9,7 @@ type worker[T any] struct {
 
 	ch chan *WorkerContext[T]
 
-	ctx       *WorkerContext[uint32]
-	obsoleted bool
+	ctx *WorkerContext[uint32]
 }
 
 func NewWorker[T any](ctx *WorkerContext[uint32]) *worker[T] {
