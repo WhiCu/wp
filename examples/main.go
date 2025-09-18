@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"sync/atomic"
 	"time"
 
 	"github.com/WhiCu/wp"
@@ -28,7 +27,6 @@ func HandlerFunc(c wp.Context[*MyInput]) {
 
 func main() {
 	flag.Parse()
-	var i atomic.Uint32
 
 	pool := wp.New(
 		HandlerFunc,
@@ -56,5 +54,4 @@ func main() {
 	fmt.Println("Status:", pool.Status())
 	pool.Stop()
 	fmt.Println("Status:", pool.Status())
-	fmt.Println("i:", i.Load())
 }
