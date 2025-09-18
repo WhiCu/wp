@@ -13,27 +13,32 @@
 go get github.com/WhiCu/wp@latest
 ```
 
-### Пример (упрощённый, см. также `cmd/main.go`)
+### Пример (см. `examples/main.go`)
 ```go
+
+
+var (
+	out        = bufio.NewWriter(os.Stdout)
+	numWorkers = flag.Uint("workers", 1, "base number of workers")
+	maxWorkers = flag.Uint("max-workers", 10, "maximum additional workers that can be created on top of base workers (total: workers + max-workers)")
+)
 
 type MyInput struct {
 	Name string
 }
 
-func HandlerFunc(i *atomic.Uint32) wp.HandlerFunc[*MyInput] {
-	return func(c wp.Context[*MyInput]) {
-		i.Add(1)
-		fmt.Println("handle:", c.GetValue().Name)
-	}
+func HandlerFunc(c wp.Context[*MyInput]) {
+	fmt.Fprintf(out, "handle: %s\n", c.GetValue().Name)
 }
 
 func main() {
+	flag.Parse()
 	var i atomic.Uint32
 
 	pool := wp.New(
-		HandlerFunc(&i),
-		wp.WithMinWorkersCount[*MyInput](3),
-		wp.WithMaxWorkersCount[*MyInput](10),
+		HandlerFunc,
+		wp.WithMinWorkersCount[*MyInput](uint32(*numWorkers)),
+		wp.WithMaxWorkersCount[*MyInput](uint32(*numWorkers+*maxWorkers)),
 		wp.WithMaxIdleWorkerDuration[*MyInput](time.Second),
 		wp.WithErrHandler[*MyInput](func(err wp.Context[error]) {
 			fmt.Println("worker error:", err.GetValue())
@@ -53,9 +58,41 @@ func main() {
 	}
 
 	time.Sleep(2 * time.Second)
+	fmt.Println("Status:", pool.Status())
 	pool.Stop()
+	fmt.Println("Status:", pool.Status())
 	fmt.Println("i:", i.Load())
 }
+
+
+```
+
+#### ВЫВОД
+
+```bash
+
+-WorkersCount: 1	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+-WorkersCount: 1	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+-WorkersCount: 2	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+-WorkersCount: 3	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+-WorkersCount: 4	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+-WorkersCount: 5	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+-WorkersCount: 6	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+-WorkersCount: 7	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+-WorkersCount: 8	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+-WorkersCount: 9	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+worker error: idle worker
+worker error: idle worker
+worker error: idle worker
+worker error: idle worker
+worker error: idle worker
+worker error: idle worker
+worker error: idle worker
+worker error: idle worker
+Status: -WorkersCount: 1	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+worker error: SIGTERM
+Status: -WorkersCount: 0	↑MaxWorkersCount: 11	↓MinWorkersCount: 1
+i: 0
 
 ```
 
